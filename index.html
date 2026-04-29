@@ -115,6 +115,8 @@
     const CELL = 600 / COLS;
     const TICK_BASE = 120;
     const SPEED_INCREMENT = 3;
+    const GOLDEN_CHANCE = 0.3;
+    const GOLDEN_DURATION = 8000;
 
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
@@ -128,7 +130,8 @@
     const BG = '#0a0a0a';
     const GRID_COLOR = '#111';
 
-    let snake, dir, nextDir, food, score, best, state, loop, tickMs;
+    let snake, dir, nextDir, food, goldenFood, goldenExpireAt;
+    let score, best, state, loop, tickMs;
     // state: 'start' | 'playing' | 'paused' | 'dead'
 
     best = parseInt(localStorage.getItem('snake-best') || '0');
@@ -144,12 +147,22 @@
       nextDir = { x: 1, y: 0 };
       score = 0;
       tickMs = TICK_BASE;
+      goldenFood = null;
+      goldenExpireAt = 0;
       scoreEl.textContent = 0;
       placeFood();
     }
 
+    function occupiedSet(excludeGolden) {
+      const set = new Set(snake.map(s => `${s.x},${s.y}`));
+      set.add(`${food.x},${food.y}`);
+      if (!excludeGolden && goldenFood) set.add(`${goldenFood.x},${goldenFood.y}`);
+      return set;
+    }
+
     function placeFood() {
       const occupied = new Set(snake.map(s => `${s.x},${s.y}`));
+      if (goldenFood) occupied.add(`${goldenFood.x},${goldenFood.y}`);
       let pos;
       do {
         pos = { x: Math.floor(Math.random() * COLS), y: Math.floor(Math.random() * ROWS) };
@@ -157,36 +170,54 @@
       food = pos;
     }
 
+    function placeGoldenFood() {
+      const occupied = occupiedSet(true);
+      let pos;
+      do {
+        pos = { x: Math.floor(Math.random() * COLS), y: Math.floor(Math.random() * ROWS) };
+      } while (occupied.has(`${pos.x},${pos.y}`));
+      goldenFood = pos;
+      goldenExpireAt = Date.now() + GOLDEN_DURATION;
+    }
+
+    function updateBest() {
+      if (score > best) {
+        best = score;
+        bestEl.textContent = best;
+        localStorage.setItem('snake-best', best);
+      }
+    }
+
     function tick() {
       dir = nextDir;
       const head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
 
-      // Wall collision
-      if (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS) {
-        return die();
-      }
-      // Self collision
-      if (snake.some(s => s.x === head.x && s.y === head.y)) {
-        return die();
-      }
+      if (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS) return die();
+      if (snake.some(s => s.x === head.x && s.y === head.y)) return die();
 
       snake.unshift(head);
+
+      if (goldenFood && Date.now() > goldenExpireAt) goldenFood = null;
+
+      let ate = false;
 
       if (head.x === food.x && head.y === food.y) {
         score++;
         scoreEl.textContent = score;
-        if (score > best) {
-          best = score;
-          bestEl.textContent = best;
-          localStorage.setItem('snake-best', best);
-        }
+        updateBest();
         tickMs = Math.max(60, TICK_BASE - score * SPEED_INCREMENT);
         placeFood();
-      } else {
-        snake.pop();
+        if (!goldenFood && Math.random() < GOLDEN_CHANCE) placeGoldenFood();
+        ate = true;
+      } else if (goldenFood && head.x === goldenFood.x && head.y === goldenFood.y) {
+        score += 5;
+        scoreEl.textContent = score;
+        updateBest();
+        goldenFood = null;
+        ate = true;
       }
 
-      draw();
+      if (!ate) snake.pop();
       scheduleNext();
     }
 
@@ -198,12 +229,10 @@
     function die() {
       state = 'dead';
       clearTimeout(loop);
-      draw();
       showOverlay('dead');
     }
 
-    function draw() {
-      // Background
+    function draw(t) {
       ctx.fillStyle = BG;
       ctx.fillRect(0, 0, 600, 600);
 
@@ -211,19 +240,13 @@
       ctx.strokeStyle = GRID_COLOR;
       ctx.lineWidth = 0.5;
       for (let x = 0; x <= COLS; x++) {
-        ctx.beginPath();
-        ctx.moveTo(x * CELL, 0);
-        ctx.lineTo(x * CELL, 600);
-        ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x * CELL, 0); ctx.lineTo(x * CELL, 600); ctx.stroke();
       }
       for (let y = 0; y <= ROWS; y++) {
-        ctx.beginPath();
-        ctx.moveTo(0, y * CELL);
-        ctx.lineTo(600, y * CELL);
-        ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, y * CELL); ctx.lineTo(600, y * CELL); ctx.stroke();
       }
 
-      // Food
+      // Regular food
       const fx = food.x * CELL, fy = food.y * CELL;
       ctx.shadowBlur = 14;
       ctx.shadowColor = FOOD_COLOR;
@@ -232,6 +255,9 @@
       ctx.arc(fx + CELL / 2, fy + CELL / 2, CELL / 2 - 2, 0, Math.PI * 2);
       ctx.fill();
       ctx.shadowBlur = 0;
+
+      // Golden apple
+      if (goldenFood) drawGoldenFood(t);
 
       // Snake
       snake.forEach((seg, i) => {
@@ -244,8 +270,67 @@
       });
       ctx.shadowBlur = 0;
 
-      // Eyes on head
       drawEyes();
+    }
+
+    function drawGoldenFood(t) {
+      const cx = goldenFood.x * CELL + CELL / 2;
+      const cy = goldenFood.y * CELL + CELL / 2;
+      const r = CELL / 2 - 1;
+
+      // Pulsing glow
+      const pulse = 0.5 + 0.5 * Math.sin(t * 0.005);
+      ctx.shadowBlur = 20 + 14 * pulse;
+      ctx.shadowColor = '#ffd700';
+
+      // Radial gradient body
+      const grad = ctx.createRadialGradient(cx - r * 0.3, cy - r * 0.3, r * 0.05, cx, cy, r * 0.9);
+      grad.addColorStop(0, '#fffde0');
+      grad.addColorStop(0.45, '#ffd700');
+      grad.addColorStop(1, '#b8860b');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r * 0.82, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // Rotating 4-pointed sparkles
+      const rot = t * 0.0022;
+      for (let i = 0; i < 6; i++) {
+        const a = rot + (i / 6) * Math.PI * 2;
+        const dist = r + 5 + 2 * Math.sin(t * 0.004 + i * 1.1);
+        const sx = cx + Math.cos(a) * dist;
+        const sy = cy + Math.sin(a) * dist;
+        const sz = 1.6 + 1.2 * Math.abs(Math.sin(t * 0.005 + i * 0.9));
+
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(a + t * 0.003);
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = '#ffd700';
+        ctx.fillStyle = '#fff8a0';
+        ctx.beginPath();
+        ctx.moveTo(0, -sz * 2.2);
+        ctx.lineTo(sz * 0.45, -sz * 0.45);
+        ctx.lineTo(sz * 2.2, 0);
+        ctx.lineTo(sz * 0.45, sz * 0.45);
+        ctx.lineTo(0, sz * 2.2);
+        ctx.lineTo(-sz * 0.45, sz * 0.45);
+        ctx.lineTo(-sz * 2.2, 0);
+        ctx.lineTo(-sz * 0.45, -sz * 0.45);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+      ctx.shadowBlur = 0;
+
+      // Countdown ring — shrinks as time runs out
+      const remaining = Math.max(0, goldenExpireAt - Date.now()) / GOLDEN_DURATION;
+      ctx.strokeStyle = `rgba(255, 215, 0, ${0.35 + 0.25 * pulse})`;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r + 10, -Math.PI / 2, -Math.PI / 2 + remaining * Math.PI * 2);
+      ctx.stroke();
     }
 
     function drawEyes() {
@@ -256,7 +341,7 @@
       const offset = CELL * 0.22;
 
       let ex1, ey1, ex2, ey2;
-      if (dir.x === 1)  { ex1 = cx + offset; ey1 = cy - offset; ex2 = cx + offset; ey2 = cy + offset; }
+      if (dir.x === 1)       { ex1 = cx + offset; ey1 = cy - offset; ex2 = cx + offset; ey2 = cy + offset; }
       else if (dir.x === -1) { ex1 = cx - offset; ey1 = cy - offset; ex2 = cx - offset; ey2 = cy + offset; }
       else if (dir.y === -1) { ex1 = cx - offset; ey1 = cy - offset; ex2 = cx + offset; ey2 = cy - offset; }
       else                   { ex1 = cx - offset; ey1 = cy + offset; ex2 = cx + offset; ey2 = cy + offset; }
@@ -274,6 +359,7 @@
         overlay.innerHTML = `
           <h1>Snake</h1>
           <div class="subtitle">Classic arcade</div>
+          <div class="subtitle" style="font-size:11px; opacity:0.5">Golden apple = 5 pts &nbsp;·&nbsp; disappears after 8s</div>
           <div class="prompt">Press Space or Enter to start</div>`;
       } else if (type === 'paused') {
         overlay.innerHTML = `
@@ -296,9 +382,15 @@
       init();
       state = 'playing';
       hideOverlay();
-      draw();
       scheduleNext();
     }
+
+    // RAF render loop — runs at 60fps for smooth sparkle animation
+    function renderLoop(t) {
+      draw(t);
+      requestAnimationFrame(renderLoop);
+    }
+    requestAnimationFrame(renderLoop);
 
     // Input
     const KEY_MAP = {
@@ -331,7 +423,6 @@
 
       const newDir = KEY_MAP[e.key];
       if (newDir && state === 'playing') {
-        // Prevent reversing
         if (newDir.x === -dir.x && newDir.y === -dir.y) return;
         nextDir = newDir;
         e.preventDefault();
@@ -341,7 +432,6 @@
     // Init start screen
     state = 'start';
     init();
-    draw();
     showOverlay('start');
   </script>
 </body>
