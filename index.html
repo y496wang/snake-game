@@ -107,7 +107,7 @@
         <div class="prompt">Press Space or Enter to start</div>
       </div>
     </div>
-    <div id="instructions">Arrow keys or WASD to move &nbsp;·&nbsp; P to pause</div>
+    <div id="instructions">Arrow keys or WASD to move &nbsp;·&nbsp; P to pause &nbsp;·&nbsp; C to clear best</div>
   </div>
 
   <script>
@@ -405,6 +405,13 @@
         if (state === 'start' || state === 'dead') startGame();
         else if (state === 'paused') { state = 'playing'; hideOverlay(); scheduleNext(); }
         e.preventDefault();
+        return;
+      }
+
+      if ((e.key === 'c' || e.key === 'C') && (state === 'start' || state === 'dead')) {
+        best = 0;
+        bestEl.textContent = 0;
+        localStorage.removeItem('snake-best');
         return;
       }
 
